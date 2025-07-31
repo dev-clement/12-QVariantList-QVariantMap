@@ -1,0 +1,256 @@
+= Transferring data from QML to Cpp and vice-versa using QVariantList or QVariantMap
+In this article, we'll explore both QVariantList as well as QVariantMap, these are things you can use to transfer data back and forth from Cpp to QML.
+
+:toc:
+:sectnums:
+
+== Introduction
+The QML engine provides automatic type conversion between link:https://doc.qt.io/qt-6/qvariant.html#QVariantList-typedef[QVariantList] and JavaScript attays, and between link:https://doc.qt.io/qt-6/qvariant.html#QVariantMap-typedef[QVariantMap] and JavaScript objects.
+
+=== QVariantList and QVariantMap to JavaScript Array-like and Object
+The QML engine provides automatic type conversion between link:https://doc.qt.io/qt-6/qvariant.html#QVariantList-typedef[QVariantList] and JavaScript array-likes, and between link:https://doc.qt.io/qt-6/qvariant.html#QVariantMap-typedef[QVariantMap] and JavaScript objects.
+
+An _array-like_, in ECMAScript terms, is an object used like an array. The array-likes produced by conversion from link:https://doc.qt.io/qt-6/qvariant.html#QVariantList-typedef[QVariantList] and other C++ sequential containers are not only that but also offer the common array methods and automatically synchronize the _length_ property. They can be used just like JavaScript Arrays for any practical purposes. The _Arrays.isArray()_ method still returns false for them, though.
+
+== Example
+NOTE: In order to test the features we told about, we are going to create a Cpp class that is going to send object between Cpp and QML using both `QVariantList` and `QVariantMap`.
+
+=== Implement the class
+So in order to send and retrieve data from the Cpp back to QML, we create a simple class named `CppClass` (how original) with the following content:
+```cpp
+// Header of cppclass.hpp
+class CppClass : public QObject
+{
+    Q_OBJECT
+public:
+    explicit CppClass(QObject *parent = nullptr);
+
+    Q_INVOKABLE void passFromQmlToCpp(const QVariantList &list, const QVariantMap &map);
+    Q_INVOKABLE QVariantList getVariantListFromCpp() const;
+    Q_INVOKABLE QVariantMap getVariantMapFromCpp() const;
+
+    void setQmlRootObject(QObject *ptr);
+signals:
+
+public slots:
+    void triggerJSCall();
+
+private:
+    QObject *_qmlRootObject;
+};
+```
+In this class, we do have a slot, that is gonna be called by the QML and also some method that are marked as `Q_INVOKABLE`, these method will be used by the QML also.
+```cpp
+// Source of cppclass.cpp
+CppClass::CppClass(QObject *parent): QObject{parent},
+                                     _qmlRootObject{nullptr} {}
+
+void CppClass::passFromQmlToCpp(const QVariantList &list /*array*/, const QVariantMap &map /*object*/) {
+    qDebug() << "Received variant list and map from QML";
+    qDebug() << "List :";
+    for (int i = 0; i < list.size(); ++i) {
+        qDebug() << "List item: " << list.at(i).toString();
+    }
+
+    qDebug() << "Map : ";
+    for (int i = 0; i < map.keys().size(); ++i) {
+        qDebug() << "Map item : " << map[map.keys().at(i)].toString();
+    }
+}
+
+QVariantList CppClass::getVariantListFromCpp() const {
+    QVariantList list;
+    list << 123.3 << QColor(Qt::cyan) << "Qt is great" << 10;
+    return list;
+}
+
+QVariantMap CppClass::getVariantMapFromCpp() const {
+    QVariantMap map;
+    map.insert("movie", "game of thrones");
+    map.insert("names", "John Snow");
+    map.insert("role", "main character");
+    map.insert("release", QDate(2011, 4, 7));
+    return map;
+}
+
+void CppClass::setQmlRootObject(QObject *object) {
+    _qmlRootObject = object;
+}
+
+void CppClass::triggerJSCall() {
+    qDebug() << "Calling JS";
+    QVariantList list = getVariantListFromCpp();
+    QVariantMap map = getVariantMapFromCpp();
+
+    QMetaObject::invokeMethod(_qmlRootObject, "arrayObjectFunc"
+                              , Q_ARG(QVariant, QVariant::fromValue(list))
+                              , Q_ARG(QVariant, QVariant::fromValue(map)));
+    qDebug() << "Called JS";
+}
+```
+=== Look at the passFromQmlToCpp
+NOTE: In the method named `passFromQmlToCpp`, there is 2 parameters, one being the `QVariantList` and the other being the `QVariantMap`.
+
+The big difference of these two types is how they will be converted from the Cpp to the QML, the `QVariantList` is going to be an array, and the `QVariantMap` is going to be an object.
+
+=== Specifying the root context
+In order to use a method in QML coming from the Cpp side, you need to use the context of it, that's why we are creating a method named `setRootObject` that is a function that will set the root object where the method will be send into. 
+
+This is gonna be needed because we are calling a method named `triggerJSCall` from the Cpp side that will call a JavaScript method named `arrayObjectFunc` in the QML side.
+
+NOTE: When we call the function named `arrayObjectFunc`, we pass both variant to it using the `Q_ARG` macros and passing `list` and `map` as a simple `QVariant`.
+
+In order to set the context inside of the `CppClass` object, you need to retrieve the context in the main, like so:
+```cpp
+int main(int argc, char *argv[])
+{
+    ...
+    CppClass cppClass;
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty("CppClass", &cppClass);
+    ...
+    if (engine.rootObjects().isEmpty()) {
+        return -1;
+    } else {
+        cppClass.setQmlRootObject(engine.rootObjects().first());
+    }
+
+    return app.exec();
+}
+```
+You get the first context inside of your main, that is the context of the `Main.qml`, now we'll be able to invoke QML method from the Cpp side using the method we defined above `triggerJSCall()`
+
+=== Implementing the QML
+Now that you create the object, set it in the root context, now you'll be able to use it in the `Main.qml` like so:
+
+```qml
+...
+import TransferingVariant
+
+Window {
+    ...
+    title: qsTr("QVariantList and QVariantMap")
+
+    function arrayObjectFunc(array, object) {
+        console.log("---Printing array---")
+        array.forEach(function(elem) {
+            console.log("Array item: " + elem)
+        })
+
+        console.log("---Printing object---")
+        for (var key in object) {
+            console.log("Object[" + key + "]: " + object[key])
+        }
+    }
+
+    Button {
+        id: btn1Id
+        text: "Pass data to Cpp"
+        onClicked: {
+            var arr = ['Africa', 'Asia', 'Europe', 'North America', 'South America', 'Oceania', 'Antartica']
+            var obj = {
+                firstName: 'John'
+                , lastName: 'Snow'
+                , location: 'Earth'
+            }
+            CppClass.passFromQmlToCpp(arr, obj)
+        }
+    }
+    
+    Button {
+        id: btn3Id
+        anchors.top : btn2Id.bottom
+        text: "GetVariantMapFromCpp"
+        onClicked: {
+            var data = CppClass.getVariantMapFromCpp() // returns an object
+            for (var key in data) {
+                console.log("Object[" + key + "] : " + data[key])
+            }
+        }
+    }
+}
+```
+
+NOTE: Inside of the above example, we did pass some information from QML to Cpp, but what if we want to use the a method from the Cpp in the QML ?
+
+By adding the following Button for instance: 
+```qml
+    Button {
+        id: btn2Id
+        text: "GetVariantListFromCpp"
+        onClicked: {
+            var data = CppClass.getVariantListFromCpp() // returns array
+            data.forEach(function(elem) {
+                console.log("Array ite: " + elem)
+            })
+        }
+    }
+    
+    Button {
+        id: btn3Id
+        anchors.top : btn2Id.bottom
+        text: "GetVariantMapFromCpp"
+        onClicked: {
+            var data = CppClass.getVariantMapFromCpp() // returns an object
+            for (var key in data) {
+                console.log("Object[" + key + "] : " + data[key])
+            }
+        }
+    }
+```
+
+IMPORTANT: Both of the types specified `VariantList` and `VariantMap` has converted into array for the list, and Object for the map.
+
+=== Triggering javascript call in QML
+Inside of the QML, we'll add the last button, that will call the `triggerJSCall` method from the Cpp:
+
+```qml
+    ...
+    function arrayObjectFunc(array, object) {
+        console.log("---Printing array---")
+        array.forEach(function(elem) {
+            console.log("Array item: " + elem)
+        })
+
+        console.log("---Printing object---")
+        for (var key in object) {
+            console.log("Object[" + key + "]: " + object[key])
+        }
+    }
+
+    ...
+    Button {
+        id: btn4Id
+        anchors.top : btn3Id.bottom
+        text: "Trigger JS call"
+        onClicked: {
+            CppClass.triggerJSCall()
+        }
+    }
+```
+
+NOTE: This method will call the `triggerJSCall` from the Cpp side, then the `triggerJSCall` method will call the javascript function named `arrayObjectFunc` that will display both QVariant.
+
+IMPORTANT: In order for the `triggerJSCall` that will call the JavaScript method to work, we have to give a root object to the object:
+
+```cpp
+...
+#include "cppclass.hpp"
+
+int main(int argc, char *argv[])
+{
+    ...
+    CppClass cppClass;
+    QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty("CppClass", &cppClass);
+    ...
+    
+    if (engine.rootObjects().isEmpty()) {
+        return -1;
+    } else {
+        cppClass.setQmlRootObject(engine.rootObjects().first());
+    }
+
+    return app.exec();
+}
+```
